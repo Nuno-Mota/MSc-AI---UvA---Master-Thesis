@@ -1,0 +1,47 @@
+# Training and evaluation related arguments.
+--max_num_epochs=2
+--batch_size=8
+--accumulate_n_batch_grads=1
+--batch_size_eval=2
+--optimiser=adam
+--learning_rate=0.001
+--weight_decay=0.0
+#ce, mse, re_bow_loss, bow_ll
+--loss_function_name=ce
+--loss_debug=True
+
+
+# Parameters concerning the dataset.
+#MNIST, UW_RE_UVA, UW_RE_UVA_DECODER_PRE_TRAIN, UW_RE_UVA_EMBEDDING_LAYER_PRE_TRAIN
+--dataset=UW_RE_UVA
+--validation=True
+--check_val_every_n_epoch=1
+--num_workers=4
+# Dataset parameters regarding the experiment type (These are ignored when using MNIST).
+--masking_type=sub_obj_masking
+--dataset_type=DEBUG
+--setting=GZS-C
+--fold=0
+--classes_descs_embed_file=ELMO_relations.hdf5
+--ulbs_type=basic
+
+
+# Specific state related arguments.
+#--epoch_or_best=-1
+--keep_last_n_chekpoints=1
+--save_path=saved_models_states/TEST/saved_states/
+
+
+# Parameters concerning the model.
+#mlp, esim_sts, re_bow, re_bow_decoder, embedding_layer, baseline
+--model_name=esim_sts
+#--load_model_arch=RE_BOW_DECODER/
+#[mlp, esim_sts, re_bow, embedding_layer]_params.txt
+--load_model_params_from_dict_file=esim_sts_params.txt
+#[MNIST, esim_sts, re_bow, embedding_layer]_metrics.txt
+--model_eval_metrics_dict_file=esim_sts_metrics_dict_GZS.txt
+
+
+# Performance arguments.
+#--cuda_device=0
+#--server_scratch=Lisa

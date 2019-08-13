@@ -1,0 +1,4 @@
+.ipynb_checkpoints/
+.idea/
+__pycache__/
+Code/saved_models_states/*
