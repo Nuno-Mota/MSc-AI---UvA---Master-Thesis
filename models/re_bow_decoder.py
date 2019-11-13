@@ -1,7 +1,22 @@
 """
 ##################################################
 ##################################################
-## TODO                                         ##
+## This file contains the implementation of a   ##
+## Bag of Words decoder, projecting from a      ##
+## representation of each class to the          ##
+## vocabulary size.                             ##
+##                                              ##
+## DISCLAIMER: This file ended up not being     ##
+## part of our work, as it was mainly used for  ##
+## exploratory experiments. At some point we    ##
+## realised that some of our earlier ideas were ##
+## actually non-sensical, but, since we also    ##
+## decided to drop this line of research, we    ##
+## never got around to removing the code used   ##
+## by those earlier ideas. As such, this file   ##
+## requires some major refactoring in order     ##
+## to represent our latest findings.            ##
+## TODO: This is left for future work.          ##
 ##################################################
 ##################################################
 """
@@ -42,6 +57,7 @@ class RE_BOW_DECODER(nn.Module):
                  load_path=None, epoch_or_best=None, loaded_arch=False, device=torch.device('cpu'), **model_params):
         """
         Instantiates a RE_BOW_DECODER model object.
+        TODO: Make docstring.
         """
 
         super(RE_BOW_DECODER, self).__init__()
@@ -121,8 +137,21 @@ class RE_BOW_DECODER(nn.Module):
 
 
 
-    # TODO: make docstring.
+    # TODO: The parameter relation_unsort_idxs does not reflect our latest findings and is in fact non-sensical. Read
+    # TODO: this file's docstring.
     def forward(self, batch=None, data_loader_type='train', relation_unsort_idxs=None):
+        """
+        Performs the network's forward pass.
+
+
+        :param x_batch         : The input batch to the network.
+
+        :param data_loader_type: Allows the identification of whether the model is being trained or simply evaluated,
+                                 which can be important due to different behaviour on either stage.
+
+
+        :return: The output of the network, for the input batch.
+        """
 
         if (self._vector_relation_encoding):
             word_probs = self._softmax_over_vocab(self._vector_encodings)
@@ -160,17 +189,19 @@ class RE_BOW_DECODER(nn.Module):
 
 
 
-    def save(self, current_epoch, path, file_type, save_parameters=True):
+    def save(self, current_epoch, path, file_type, save_weights=True):
         """
-        Saves the network to files.TODO: Missing parameters.
+        Saves the network to files.
 
 
         :param current_epoch: Identifies the current epoch, which will be used to identify the saved files.
 
-        :param path         : The path to the directory where the thework will be saved as files.
+        :param path         : The path to the directory where the state will be saved as files.
 
         :param file_type    : Identifies whether the save pertains a regular checkpoint, or the best performing model,
                               so far.
+
+        :param save_weights : A boolean indicating whether the weights should be saved or not.
 
 
         :return: Nothing
@@ -194,7 +225,7 @@ class RE_BOW_DECODER(nn.Module):
             torch.save(architecture, path + "architecture.act")
 
         # Saves the weights for the current_epoch, associated either with a checkpoint or the best performing model.
-        if (save_parameters):
+        if (save_weights):
             torch.save(self.state_dict(), path + "weights" + file_type)
 
 

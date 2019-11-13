@@ -1,7 +1,17 @@
 """
 ##################################################
 ##################################################
-## TODO ##
+## This file implements an auto-encoder using   ##
+## ESIM's first BiLSTM layer as the encoder and ##
+## a second single layer BiLSTM as the decoder. ##
+## The idea was to test whether pre-training    ##
+## ESIM's first BiLSTM, which essentially just  ##
+## projects ELMo embeddings to a lower          ##
+## dimensional manifold, would yield better     ##
+## results, as we could use the entire dataset  ##
+## to learn the representation, instead of      ##
+## using just the data corresponding to the     ##
+## Any-Shot learning setting being considered.  ##
 ##################################################
 ##################################################
 """
@@ -14,7 +24,7 @@
 
 import torch
 import torch.nn as nn
-from   torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence, PackedSequence
+from   torch.nn.utils.rnn import PackedSequence
 #TODO: Remove "import os" if we can use trainer_helpers to load a model. Do we want to, though? Then the model is
 #TODO: dependant on the trainer. Write model saving/loading function in the general trainers?
 import os
@@ -35,13 +45,32 @@ import helpers.trainer.helpers as trainer_helpers
 
 class ESIM_Embed_Layer_AE(nn.Module):
     """
-    TODO
+    This class implements a simple seq2seq auto-encoder model, which allows learning the ELMo embeddings lower
+    dimensional representation (i.e. after passing through ESIM's first BiLSTM stage) using the full dataset, instead
+    of using simply the dataset associated with a specific Any-Shot Learning experiment.
     """
 
     def __init__(self, word_embedding_size=None, first_bilstm_hidden_size=None, first_bilst_num_layers=1,
                  load_path=None, epoch_or_best=None, loaded_arch=False, device=torch.device('cpu'), **params_dict):
         """
         Instantiates an ESIM_Embed_Layer_AE model object.
+
+        :param word_embedding_size     : The size of the word embeddings.
+
+        :param first_bilstm_hidden_size: The hidden size of the BiLSTM. The name is to keep it in line with esim_sts.
+
+        :param first_bilst_num_layers  : The number of BiLSTM layers. The name is to keep it in line with esim_sts.
+
+        :param load_path               : The path to a previously saved state.
+
+        :param epoch_or_best           : A number indicating which epoch to load ('-1' for the best performing epoch).
+
+        :param loaded_arch             : A boolean that allows for a simple previous state loading pattern.
+
+        :param device                  : The device (CPU, GPU-n) on which the model is meant to be run.
+
+        :param params_dict             : Allows passing some of the previous parameters as a dictionary that gets
+                                         unpacked.
         """
 
         super(ESIM_Embed_Layer_AE, self).__init__()
@@ -51,6 +80,7 @@ class ESIM_Embed_Layer_AE(nn.Module):
         self._epoch_or_best = epoch_or_best
 
 
+        # Simple loading pattern that allows for a parameter dictionary to be read directly from file.
         if (not loaded_arch and load_path is not None):
             with open(load_path + "architecture.act", 'rb') as f:
                 self.__init__(load_path=load_path, epoch_or_best=epoch_or_best, loaded_arch=True,
@@ -65,31 +95,36 @@ class ESIM_Embed_Layer_AE(nn.Module):
         self._device = device
 
 
-        # Encoder
+        ###########
+        # ENCODER #
+        ###########
 
         # Input --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-        # Output --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+        # Output --> Packed_Sequence([Batch_Size, Max_Seq_Len, first_bilstm_hidden_size])
         self._encoder = nn.LSTM(self._word_embedding_size, self._first_bilstm_hidden_size,
                                 self._first_bilst_num_layers, bidirectional=True, batch_first=True)
 
 
-        # Decoder
+        ###########
+        # DECODER #
+        ###########
 
-        # Input --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
-        # Output --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
+        # Input --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, first_bilstm_hidden_size])
+        # Output --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, word_embedding_size])
         self._decoder = nn.LSTM(2*self._first_bilstm_hidden_size, self._word_embedding_size,
                                 self._first_bilst_num_layers, bidirectional=True, batch_first=True)
 
 
-        ##########################################################################################################
-        # 1 layer (0 hidden) MLP that reduces the dimensionality of the decoder output back to the original size #
-        ##########################################################################################################
-        # Input --> [sum(seq_lengths), 2*First_BiLSTM_Stage_Hidden_Size]
-        # Output --> [sum(seq_lengths), First_BiLSTM_Stage_Hidden_Size]
+        #*** 1 layer (0 hidden) MLP that reduces the dimensionality of the decoder output back to the original size ***#
+        # Input --> [sum(Batch_Seq_Lens), 2*first_bilstm_hidden_size]
+        # Output --> [sum(Batch_Seq_Lens), first_bilstm_hidden_size]
         self._dim_reduction_mlp = MLP([2*self._word_embedding_size, self._word_embedding_size],
                                       [nn.ReLU()], device=self._device)
 
 
+        #################
+        # MISCELLANEOUS #
+        #################
 
         # Load previous state, if adequate.
         previous_weights = trainer_helpers.load_checkpoint_state(self._load_path, "weights", self._epoch_or_best,
@@ -109,37 +144,38 @@ class ESIM_Embed_Layer_AE(nn.Module):
         Performs the network's forward pass.
 
 
-        :param x_batch: The input batch to the network.
-        TODO: Add missing parameters.
+        :param x_batch         : The input batch to the network.
+
+        :param data_loader_type: Allows the identification of whether the model is being trained or simply evaluated,
+                                 which can be important due to different behaviour on either stage.
 
 
         :return: The output of the network, for the input batch.
         """
 
-        # TODO: This is a workaround to solve the issue that when the dataloader's 'pin_memory=True' PackedSequences
-        # TODO: get 'destroyed' and only the 'data' and 'batch_sizes' tensors remain.
+        # TODO: This is a workaround to solve the issue of when the dataloader's 'pin_memory=True' PackedSequences
+        # TODO: get 'destroyed' and only the 'data' and 'batch_sizes' tensors remain. THIS IS A PyTorch BUG.
         if (str(self._device)[:3] != 'cpu'):
             sentences = PackedSequence(batch[0], batch[1].to(device='cpu'))
         else:
             sentences = batch
 
 
-        ################
-        # Forward Pass #
-        ################
+        ###########
+        # ENCODER #
+        ###########
 
-        # Encoder.
-
-        # In --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-        # Out --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+        # Input --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, word_embedding_size])
+        # Output --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, first_bilstm_hidden_size])
         embeded_sentences, (_, _) = self._encoder(sentences)
 
 
+        ###########
+        # DECODER #
+        ###########
 
-        # Decoder.
-
-        # In --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-        # Out --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+        # Input --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, word_embedding_size])
+        # Output --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, first_bilstm_hidden_size])
         reconstructed_sentences, (_, _) = self._decoder(embeded_sentences)
         reconstructed_embeddings = self._dim_reduction_mlp(reconstructed_sentences.data)[0]
 
@@ -149,17 +185,19 @@ class ESIM_Embed_Layer_AE(nn.Module):
 
 
 
-    def save(self, current_epoch, path, file_type, save_parameters=True):
+    def save(self, current_epoch, path, file_type, save_weights=True):
         """
-        Saves the network to files.TODO: Missing parameters.
+        Saves the network to files.
 
 
         :param current_epoch: Identifies the current epoch, which will be used to identify the saved files.
 
-        :param path         : The path to the directory where the thework will be saved as files.
+        :param path         : The path to the directory where the state will be saved as files.
 
         :param file_type    : Identifies whether the save pertains a regular checkpoint, or the best performing model,
                               so far.
+
+        :param save_weights : A boolean indicating whether the weights should be saved or not.
 
 
         :return: Nothing
@@ -175,7 +213,7 @@ class ESIM_Embed_Layer_AE(nn.Module):
             torch.save(architecture, path + "architecture.act")
 
         # Saves the weights for the current_epoch, associated either with a checkpoint or the best performing model.
-        if (save_parameters):
+        if (save_weights):
             torch.save(self.state_dict(), path + "weights" + file_type)
 
 

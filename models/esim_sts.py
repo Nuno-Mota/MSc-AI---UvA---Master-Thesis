@@ -27,7 +27,7 @@ import os
 # *** Own modules imports. *** #
 
 from   models.mlp import MLP
-from models.esim_embed_layer_AE import ESIM_Embed_Layer_AE
+from   models.esim_embed_layer_AE import ESIM_Embed_Layer_AE
 import helpers.trainer.helpers as trainer_helpers
 
 
@@ -56,6 +56,50 @@ class ESIM_StS(nn.Module):
                  load_path=None, epoch_or_best=None, loaded_arch=False, device=torch.device('cpu'), **params_dict):
         """
         Instantiates an ESIM_StS model object.
+
+
+        :param classes_descs_embed_file              : The path to the file of the ELMo embeddings of the classes'
+                                                       descriptions.
+
+        :param word_embedding_size                   : The size of the word embeddings.
+
+        :param pretrained_embedding_layer_path       : Boolean indicating whether to use a pretrained embedding layer or
+                                                       not.
+
+        :param single_embedding_bilstm               : A boolean parameter to indicate whether to use a single BiLSTM
+                                                       for both x and y, or whether to use distinct ones.
+
+        :param first_bilstm_hidden_size              : The hidden size of the first BiLSTM stage.
+
+        :param post_attention_size                   : The word embedding size (projected with a MLP) after attention
+                                                       has been computed.
+
+        :param second_bilstm_hidden_size             : The hidden size of the second BiLSTM stage.
+
+        :param score_mlp_post_first_layer_sizes      : The score MLP last layer sizes (i.e., after the first layer,
+                                                       which has a size dependent on the previous model components).
+
+        :param score_mlp_post_first_layer_activations: The score MLP last activation functions (i.e., after the first
+                                                       layer, which has a fixed LeakyReLU).
+
+        :param leakyReLU_negative_slope              : The negative slope of the LeakyReLUs used in the model.
+
+        :param first_bilst_num_layers                : The number of layers of the first BiLSTM stage.
+
+        :param second_bilst_num_layers               : The number of layers of the second BiLSTM stage.
+
+        :param load_path                             : The path to a previously saved state.
+
+        :param epoch_or_best                         : A number indicating which epoch to load ('-1' for the best
+                                                       performing epoch).
+
+        :param loaded_arch                           : A boolean that allows for a simple previous state loading
+                                                       pattern.
+
+        :param device                                : The device (CPU, GPU-n) on which the model is meant to be run.
+
+        :param params_dict                           : Allows passing some of the previous parameters as a dictionary
+                                                       that gets unpacked.
         """
 
         super(ESIM_StS, self).__init__()
@@ -67,6 +111,7 @@ class ESIM_StS(nn.Module):
         self._epoch_or_best = epoch_or_best
 
 
+        # Simple loading pattern that allows for a parameter dictionary to be read directly from file.
         if (not loaded_arch and load_path is not None):
             with open(load_path + "architecture.act", 'rb') as f:
                 self.__init__(classes_descs_embed_file=classes_descs_embed_file, load_path=load_path,
@@ -106,7 +151,9 @@ class ESIM_StS(nn.Module):
         # Input Embedding Layer #
         #########################
 
+        # Use a single BiLSTM, i.e. for both x and y, as the first ESIM component.
         if (self._single_embedding_bilstm):
+            # Load a pre-trained embedding BiLSTM.
             if (pretrained_embedding_layer_path is not None):
                 model_files = os.listdir(pretrained_embedding_layer_path + os.sep + "Model" + os.sep)
                 best_epoch = [int(file.split('.')[-2]) for file in model_files if file.endswith('.bst')]
@@ -117,13 +164,16 @@ class ESIM_StS(nn.Module):
 
                 self._embedding_bilstm = ESIM_Embed_Layer_AE(load_path=pretrained_model_path,
                                                              epoch_or_best=pretrained_epoch_or_best).encoder
+            # Create an embedding BiLSTM from scratch.
             else:
-                # Input --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-                # Output --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+                # Input --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, word_embedding_size])
+                # Output --> Packed_Sequence([Batch_Size, Max_Batch_Seq_Len, first_bilstm_hidden_size])
                 self._embedding_bilstm = nn.LSTM(self._word_embedding_size, self._first_bilstm_hidden_size,
                                                  self._first_bilst_num_layers, bidirectional=True, batch_first=True)
 
+        # Use two distinct BiLSTMs, i.e. one for x and one for y, as the first ESIM component.
         else:
+            # Load a pre-trained embedding BiLSTMs (the same weights for both the x and y BiLSTMs) .
             if (pretrained_embedding_layer_path is not None):
                 model_files = os.listdir(pretrained_embedding_layer_path + os.sep + "Model" + os.sep)
                 best_epoch = [int(file.split('.')[-2]) for file in model_files if file.endswith('.bst')]
@@ -137,14 +187,15 @@ class ESIM_StS(nn.Module):
 
                 self._first_y_bilstm = ESIM_Embed_Layer_AE(load_path=pretrained_model_path,
                                                            epoch_or_best=pretrained_epoch_or_best).encoder
+            # Create an embedding BiLSTMs from scratch.
             else:
-                # Input --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-                # Output --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+                # Input --> Packed_Sequence([Batch_Size, Max_Batch_x_Seq_Len, word_embedding_size])
+                # Output --> Packed_Sequence([Batch_Size, Max_Batch_x_Seq_Len, first_bilstm_hidden_size])
                 self._first_x_bilstm = nn.LSTM(self._word_embedding_size, self._first_bilstm_hidden_size,
                                                self._first_bilst_num_layers, bidirectional=True, batch_first=True)
 
-                # Input --> Packed_Sequence([Num_Descriptions, Max_Description_Len, Word_Embedding_Size])
-                # Output --> Packed_Sequence([Num_Descriptions, Max_Description_Len, First_BiLSTM_Stage_Hidden_Size])
+                # Input --> Packed_Sequence([Num_Descriptions, Max_Batch_y_Seq_Len, Word_Embedding_Size])
+                # Output --> Packed_Sequence([Num_Descriptions, Max_Batch_y_Seq_Len, first_bilstm_hidden_size])
                 self._first_y_bilstm = nn.LSTM(self._word_embedding_size, self._first_bilstm_hidden_size,
                                                self._first_bilst_num_layers, bidirectional=True, batch_first=True)
 
@@ -165,7 +216,7 @@ class ESIM_StS(nn.Module):
         #####################################################################################################
         # 1 layer (0 hidden) MLP that reduces the dimensionality of the post-attention concatenated vectors #
         #####################################################################################################
-        # Input --> [sum(seq_lengths in ("Batch" or "Relations' Descriptions")), First_BiLSTM_Stage_Hidden_Size]
+        # Input --> [sum(seq_lengths in ("Batch" or "Relations' Descriptions")), first_bilstm_hidden_size]
         # Output --> [sum(seq_lengths in ("Batch" or "Relations' Descriptions")), Post_Attention_Embeddings_Size]
         self._dim_reduction_mlp = MLP([8*self._first_bilstm_hidden_size, self._post_attention_size],
                                       [nn.LeakyReLU(negative_slope=self._leakyReLU_negative_slope)],
@@ -177,13 +228,13 @@ class ESIM_StS(nn.Module):
         # Inference Composition Layer #
         ###############################
 
-        # Input --> [Batch_Size, Max_Seq_Len, Post_Attention_Embeddings_Size]
-        # Output --> [Batch_Size, Max_Seq_Len, Second_BiLSTM_Stage_Hidden_Size]
+        # Input --> [Batch_Size, Max_Batch_x_Seq_Len, post_attention_size]
+        # Output --> [Batch_Size, Max_Batch_x_Seq_Len, second_bilstm_hidden_size]
         self._second_x_bilstm = nn.LSTM(self._post_attention_size, self._second_bilstm_hidden_size,
                                         self._second_bilst_num_layers, bidirectional=True, batch_first=True)
 
-        # Input --> [Num_Descriptions, Max_Description_Len, Post_Attention_Embeddings_Size]
-        # Output --> [Num_Descriptions, Max_Description_Len, Second_BiLSTM_Stage_Hidden_Size]
+        # Input --> [Num_Descriptions, Max_Batch_y_Seq_Len, post_attention_size]
+        # Output --> [Num_Descriptions, Max_Batch_y_Seq_Len, second_bilstm_hidden_size]
         self._second_y_bilstm = nn.LSTM(self._post_attention_size, self._second_bilstm_hidden_size,
                                         self._second_bilst_num_layers, bidirectional=True, batch_first=True)
 
@@ -198,11 +249,10 @@ class ESIM_StS(nn.Module):
         ##########################################################
         # We split the MLP into 2 different MLPs, so that we have the possibility of training ESIM on SNLI & MultiNLI
         # and then perform transfer learning to our task. This way, we load the entire ESIM model for NLI and load all
-        # the weights, except for the very last layer.
+        # the weights, except for the very last layer. Disclaimer: this kind of transfer learning was NOT actually done!
 
-        # Input --> [Batch_Size * Num_Descriptions, Second_BiLSTM_Stage_Hidden_Size]
-        # Output --> [Batch_Size * Num_Descriptions, score_mlp_after_first_layer_sizes[-1] (this will be 0 or 3)]
-
+        # Input --> [Batch_Size * Num_Descriptions, second_bilstm_hidden_size]
+        # Output --> [Batch_Size * Num_Descriptions, score_mlp_after_first_layer_sizes[-1] (this will be 1 or 3)]
         # All layers but the last.
         layers = [8*self._second_bilstm_hidden_size] + self._score_mlp_post_first_layer_sizes[:-1]
         activations = [nn.LeakyReLU(negative_slope=self._leakyReLU_negative_slope)]
@@ -213,8 +263,10 @@ class ESIM_StS(nn.Module):
         self._score_mlp_last = MLP(self._score_mlp_post_first_layer_sizes[-2:],
                                    self._score_mlp_post_first_layer_activations[-1:], device=self._device)
 
-        # self._softmax_across_relations = torch.nn.Softmax(dim=1)
 
+        #################
+        # MISCELLANEOUS #
+        #################
 
         # Load previous state, if adequate.
         previous_weights = trainer_helpers.load_checkpoint_state(self._load_path, "weights", self._epoch_or_best,
@@ -228,22 +280,22 @@ class ESIM_StS(nn.Module):
 
 
 
-    # TODO: Implement memory freeing methods.
-    # TODO: remake docstring to account for data_loader_type.
     def forward(self, batch, data_loader_type=None):
         """
         Performs the network's forward pass.
 
 
-        :param x_batch: The input batch to the network.
-        TODO: Add missing parameters.
+        :param x_batch         : The input batch to the network.
+
+        :param data_loader_type: Allows the identification of whether the model is being trained or simply evaluated,
+                                 which can be important due to different behaviour on either stage.
 
 
         :return: The output of the network, for the input batch.
         """
 
-        # TODO: This is a workaround to solve the issue that when the dataloader's 'pin_memory=True' PackedSequences
-        # TODO: get 'destroyed' and only the 'data' and 'batch_sizes' tensors remain.
+        # TODO: This is a workaround to solve the issue of when the dataloader's 'pin_memory=True' PackedSequences
+        # TODO: get 'destroyed' and only the 'data' and 'batch_sizes' tensors remain. THIS IS A PyTorch BUG.
         if (str(self._device)[:3] != 'cpu'):
             x_sentences = PackedSequence(batch[0][0], batch[0][1].to(device='cpu'))
         else:
@@ -276,15 +328,15 @@ class ESIM_StS(nn.Module):
         # Input Embedding Layer #
         #########################
 
-        # In --> Packed_Sequence([Batch_Size, Max_Seq_Len, word_embedding_size])
-        # Out --> Packed_Sequence([Batch_Size, Max_Seq_Len, First_BiLSTM_Stage_Hidden_Size])
+        # Input --> Packed_Sequence([Batch_Size, Max_Batch_x_Seq_Len, word_embedding_size])
+        # Output --> Packed_Sequence([Batch_Size, Max_Batch_x_Seq_Len, first_bilstm_hidden_size])
         if (self._single_embedding_bilstm):
             x_sentences_post_first_lstm, (_, _) = self._embedding_bilstm(x_sentences)
         else:
             x_sentences_post_first_lstm, (_, _) = self._first_x_bilstm(x_sentences)
 
-        # In --> Packed_Sequence([Num_Descriptions, Max_Description_Len, word_embedding_size])
-        # Out --> Packed_Sequence([Num_Descriptions, Max_Description_Len, First_BiLSTM_Stage_Hidden_Size])
+        # Input --> Packed_Sequence([Num_Descriptions, Max_Batch_y_Seq_Len, word_embedding_size])
+        # Output --> Packed_Sequence([Num_Descriptions, Max_Batch_y_Seq_Len, first_bilstm_hidden_size])
         if (self._single_embedding_bilstm):
             y_sentences_post_first_lstm, (y_h_n, _) = self._embedding_bilstm(y_sentences)
         else:
@@ -305,12 +357,10 @@ class ESIM_StS(nn.Module):
         unpacked_y_sentences, y_lengths = pad_packed_sequence(y_sentences_post_first_lstm, batch_first=True)
         num_x_sentences = x_lengths.shape[0]
         num_y_sentences = y_lengths.shape[0]
-        # TODO: This can be take care of before? So that at this point nothing needs to be loaded into GPU memory.
         device_x_lengths = torch.empty(x_lengths.shape, dtype=torch.int64, device=self._device).copy_(x_lengths,
                                                                                                       non_blocking=True)
         device_y_lengths = torch.empty(y_lengths.shape, dtype=torch.int64, device=self._device).copy_(y_lengths,
                                                                                                       non_blocking=True)
-
 
         # Create a mask for the attention elements which are not meant to be included in the normalisation factors, due
         # to variable sequence length.
@@ -329,7 +379,6 @@ class ESIM_StS(nn.Module):
         attention_values_mask_for_x_tilde = torch.matmul(torch.ones_like(mask_x).float(), mask_y.float()).byte()
         attention_values_mask_for_y_tilde = torch.matmul(mask_x.float(), torch.ones_like(mask_y).float()).byte()
 
-
         # Permute last two axis of the y sentences, in order to allow the inter sentences matrix multiplications.
         unpacked_y_sentences = unpacked_y_sentences.permute(0, 2, 1)
 
@@ -337,10 +386,8 @@ class ESIM_StS(nn.Module):
         unpacked_x_sentences = unpacked_x_sentences.unsqueeze(1)
         unpacked_y_sentences = unpacked_y_sentences.unsqueeze(0)
 
-
         # Compute the Attention Elements (e_{ij}).
         attention_elements = torch.matmul(unpacked_x_sentences, unpacked_y_sentences)
-
 
         # Get y sentences' tensor's axes back to the correct shape.
         unpacked_y_sentences = unpacked_y_sentences.permute(0, 1, 3, 2)
@@ -371,15 +418,14 @@ class ESIM_StS(nn.Module):
 
         # x_tilde is no longer needed, so release it from memory.
         del x_tilde
-        #TODO: If cuda
         torch.cuda.empty_cache()
 
         # Add the normal x encoded sentences to 'm_x'.
         m_x = torch.cat((unpacked_x_sentences.expand(-1, unpacked_y_sentences.shape[1], -1, -1), m_x), dim=3)
 
         # Reshape m_x:
-        # From: [Batch_Size, Num_Descriptions, Max_Seq_Len, 4 * First_BiLSTM_Stage_Hidden_Size]
-        # To:   [Batch_Size * Num_Descriptions, Max_Seq_Len, 4 * First_BiLSTM_Stage_Hidden_Size]
+        # Input --> [Batch_Size, Num_Descriptions, Max_Batch_x_Seq_Len, 4 * first_bilstm_hidden_size]
+        # Output --> [Batch_Size * Num_Descriptions, Max_Batch_x_Seq_Len, 4 * first_bilstm_hidden_size]
         m_x = m_x.reshape(m_x.shape[0] * m_x.shape[1], m_x.shape[2], m_x.shape[3])
 
         # Compute m_x's sequence lengths and transform m_x into a PackedSequence. We pad it before reducing the
@@ -413,7 +459,6 @@ class ESIM_StS(nn.Module):
 
         # y_tilde is no longer needed, so release it from memory.
         del y_tilde
-        # TODO: If cuda
         torch.cuda.empty_cache()
 
         # Add the normal y encoded sentences to 'm_y'.
@@ -421,14 +466,14 @@ class ESIM_StS(nn.Module):
 
         # In order to apply the same PackedSequence trick as we did for m_x, in order to avoid making computations for
         # masked values, we need to first rotate m_y to get it in the shape:
-        # [Num_Descriptions, Batch_Size, Max_Description_Len, 4 * First_BiLSTM_Stage_Hidden_Size]
+        # [Num_Descriptions, Batch_Size, Max_Batch_y_Seq_Len, 4 * first_bilstm_hidden_size]
         # This will allow us to correctly compute the sentence lengths of m_y (because we now need to account for each
         # y sentence having been paired with each x sentence).
         m_y = m_y.permute(1, 0, 2, 3)
 
         # Reshape m_y:
-        # From: [Num_Descriptions, Batch_Size, Max_Description_Len, 4 * First_BiLSTM_Stage_Hidden_Size]
-        # To:   [Num_Descriptions * Batch_Size, Max_Description_Len, 4 * First_BiLSTM_Stage_Hidden_Size]
+        # From: [Num_Descriptions, Batch_Size, Max_Batch_y_Seq_Len, 4 * first_bilstm_hidden_size]
+        # To:   [Num_Descriptions * Batch_Size, Max_Batch_y_Seq_Len, 4 * first_bilstm_hidden_size]
         m_y = m_y.reshape(num_y_sentences * num_x_sentences, m_y.shape[2], m_y.shape[3])
 
         # Compute m_y's sequence lengths and transform m_y into a PackedSequence. We pad it before reducing the
@@ -449,15 +494,16 @@ class ESIM_StS(nn.Module):
 
         # *** Compute the 'v_x' and 'v_y' vectors (result of second stage BiLSTM pass) *** #
 
-        # In --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Seq_Len, 4*First_BiLSTM_Stage_Hidden_Size])
-        # Out --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Seq_Len, Post_Attention_Embeddings_Size])
+        # Input --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Batch_x_Seq_Len, 4*first_bilstm_hidden_size])
+        # Output --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Batch_x_Seq_Len, post_attention_size])
         v_x, (_, _) = self._second_x_bilstm(m_x)
 
-        # In --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Description_Len, 4*First_BiLSTM_Stage_Hidden_Size])
-        # Out --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Description_Len, Post_Attention_Embeddings_Size])
+        # Input --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Batch_y_Seq_Len, 4*first_bilstm_hidden_size])
+        # Output --> Packed_Sequence([Batch_Size * Num_Descriptions, Max_Batch_y_Seq_Len, post_attention_size])
         v_y, (_, _) = self._second_y_bilstm(m_y)
 
 
+        # Compute the average and max for both v_x and v_y.
         unpacked_v_x, m_x_lens = pad_packed_sequence(v_x, batch_first=True)
         device_m_x_lens = torch.empty(m_x_lens.shape, dtype=torch.int64, device=self._device).copy_(m_x_lens,
                                                                                                     non_blocking=True)
@@ -476,7 +522,7 @@ class ESIM_StS(nn.Module):
 
         # In the case of v_y (which originates from m_y) we need to reshape and permute it, so that we can once more
         # have the elements in the order:
-        # [Batch_Size, Num_Descriptions, Max_Description_Len, Post_Attention_Embeddings_Size]
+        # [Batch_Size, Num_Descriptions, Max_Batch_y_Seq_Len, post_attention_size]
         # thus allowing us to pair them correctly with v_x, to form v.
         v_y = v_y.reshape(num_y_sentences, num_x_sentences, v_y.shape[1])
         v_y = v_y.permute(1, 0, 2)
@@ -486,6 +532,7 @@ class ESIM_StS(nn.Module):
         v = torch.cat((v_x_avg, v_x_max, v_y), dim=1)
 
 
+        # Compute the scores, i.e. the logits.
         logits = self._score_mlp_last(self._score_mlp_but_last(v)[0])[0]
 
         logits = logits.squeeze(1).reshape(num_x_sentences, num_y_sentences)
@@ -493,7 +540,7 @@ class ESIM_StS(nn.Module):
         logits = logits[:, relation_perm_unsort_idxs]
 
 
-        # When evaluating, we want to aggregate over the multiple descriptions for each relation.
+        # When evaluating, we want to aggregate (we use the maximum) over the multiple descriptions for each relation.
         if (data_loader_type != 'train' and batch[1][1] is not None):
             aggregated_logits = torch.max(logits[:, batch[1][1][0]], dim=1)[0].unsqueeze(1)
             for aggregate_idxs in batch[1][1][1:]:
@@ -507,17 +554,19 @@ class ESIM_StS(nn.Module):
 
 
 
-    def save(self, current_epoch, path, file_type, save_parameters=True):
+    def save(self, current_epoch, path, file_type, save_weights=True):
         """
-        Saves the network to files.TODO: Missing parameters.
+        Saves the network to files.
 
 
         :param current_epoch: Identifies the current epoch, which will be used to identify the saved files.
 
-        :param path         : The path to the directory where the thework will be saved as files.
+        :param path         : The path to the directory where the state will be saved as files.
 
         :param file_type    : Identifies whether the save pertains a regular checkpoint, or the best performing model,
                               so far.
+
+        :param save_weights : A boolean indicating whether the weights should be saved or not.
 
 
         :return: Nothing
@@ -540,7 +589,7 @@ class ESIM_StS(nn.Module):
             torch.save(architecture, path + "architecture.act")
 
         # Saves the weights for the current_epoch, associated either with a checkpoint or the best performing model.
-        if (save_parameters):
+        if (save_weights):
             torch.save(self.state_dict(), path + "weights" + file_type)
 
 

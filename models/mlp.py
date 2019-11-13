@@ -41,29 +41,27 @@ class MLP(nn.Module):
                  weight_initialization=None, load_path=None, epoch_or_best=None, device=torch.device('cpu'),
                  **param_dict):
         """
-        TODO: Add dropout parameter docstring. Add batchnorm?
-        Instantiates a MLP model object. NOTE: Arguments can be either directly specified on object creation or they
-                                               can be unpacked using a parameter dictionary (**param_dict). For each
-                                               argument only one of the methods can be used, otherwise an error occurs.
-                                               It is, however, possible to define some arguments specifically and others
-                                               by defining them in the parameter dictionary. E.g:
-                                               param_dict = {'layers_sizes': [784, 300, 10], 'bias': False}
-                                               mlp = MLP(activation_functions=[Relu(), Softmax()], **param_dict)
+        Instantiates a MLP model object.
 
 
         :param layers_sizes         : A list that specifies the size of each layer.
 
         :param activation_functions : A list that specifies the activation function applied at each layer.
 
+        :param dropout_values       : A list that specifies the dropout values of each layer.
+
         :param bias                 : A boolean that determines whether to use bias terms or not.
 
-        :param weight_initialization: TODO:
+        :param weight_initialization: Specifies the weight initialization function. NOT IMPLEMENTED TODO
 
-        :param load_path            : The path that leads to the directory where the states pertaining a previously
-                                      trained model are located.
+        :param load_path               : The path to a previously saved state.
 
-        :param epoch_or_best   : Determines whether to load a specific checkpoint or whether to load the epoch
-                                      where the model performed the best.
+        :param epoch_or_best           : A number indicating which epoch to load ('-1' for the best performing epoch).
+
+        :param device                  : The device (CPU, GPU-n) on which the model is meant to be run.
+
+        :param params_dict             : Allows passing some of the previous parameters as a dictionary that gets
+                                         unpacked.
         """
 
         # Test whether it is possible to instantiate a MLP model with the provided input parameters.
@@ -73,6 +71,7 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
 
         self._device = device
+        # TODO: Should implement the simple loading pattern.
 
         # If there is a load_path, load the MLP's architecture from memory.
         arch = None if load_path is None else torch.load(load_path + "architecture.act")
@@ -95,49 +94,40 @@ class MLP(nn.Module):
         # to file.
         self._bias = bias if arch is None else arch["bias"]
 
-        # Define whether the model's layers weight iniliatization function, in order to save the architecture of the MLP
-        # to file.
-        self._weight_initialization = weight_initialization if arch is None else arch["weight_initialization"]  # TODO: add them
+        # Define whether the model's layers weight iniliatisation function, in order to save the architecture of the MLP
+        # to file. TODO: add them
+        self._weight_initialization = weight_initialization if arch is None else arch["weight_initialization"]
 
         # Build the MLP's layers.
         self._layers = nn.ModuleList(
             [nn.Linear(dims[0], dims[1], bias=self._bias) for dims in zip(self._layers_sizes, self._layers_sizes[1:])])
 
 
-        # Load previously saved weights, if necessary. TODO: Change this part so the model is independent of the trainer.
+        #################
+        # MISCELLANEOUS #
+        #################
+
+        # Load previous state, if adequate.
         previous_weights = trainer_helpers.load_checkpoint_state(load_path, "weights", epoch_or_best,
                                                                  device=self._device)
 
         if (previous_weights is not None):
             self.load_state_dict(previous_weights)
 
-        # if (load_epoch_or_best is not None and isinstance(load_epoch_or_best, int)):
-        #     existing_files = os.listdir(load_path)
-        #     if (load_epoch_or_best == -1 and # -1 identifies the best model
-        #             ".bst" in {existing_file[-4:] for existing_file in existing_files}):
-        #         # Get the correct path to where the weights are stored
-        #         path_to_load = load_path
-        #         path_to_load += [existing_file for existing_file in existing_files if existing_file.endswith(".bst")][0]
-        #         self.load_state_dict(torch.load(path_to_load))
-        #     elif (load_epoch_or_best >= 0 and os.path.exists(
-        #             load_path + "weights." + str(load_epoch_or_best) + ".ckp")):
-        #         self.load_state_dict(torch.load(load_path + "weights." + str(load_epoch_or_best) + ".ckp"))
-        #     else:
-        #         raise ValueError("Tried to load model's state dict for invalid or inexisting epoch (epoch num: " + str(
-        #             load_epoch_or_best) + ").")
-
         self.to(device=self._device)
 
 
 
 
-    # TODO: remake docstring to account for data_loader_type.
     def forward(self, x_batch, data_loader_type=None):
         """
         Performs the network's forward pass.
 
 
-        :param x_batch: The input batch to the network.
+        :param x_batch         : The input batch to the network.
+
+        :param data_loader_type: Allows the identification of whether the model is being trained or simply evaluated,
+                                 which can be important due to different behaviour on either stage.
 
 
         :return: The output of the network, for the input batch.
@@ -156,17 +146,19 @@ class MLP(nn.Module):
 
 
 
-    def save(self, current_epoch, path, file_type, save_parameters=True):
+    def save(self, current_epoch, path, file_type, save_weights=True):
         """
-        Saves the network to files.TODO: Missing parameters.
+        Saves the network to files.
 
 
         :param current_epoch: Identifies the current epoch, which will be used to identify the saved files.
 
-        :param path         : The path to the directory where the thework will be saved as files.
+        :param path         : The path to the directory where the state will be saved as files.
 
         :param file_type    : Identifies whether the save pertains a regular checkpoint, or the best performing model,
                               so far.
+
+        :param save_weights : A boolean indicating whether the weights should be saved or not.
 
 
         :return: Nothing
@@ -183,5 +175,5 @@ class MLP(nn.Module):
             torch.save(architecture, path + "architecture.act")
 
         # Saves the weights for the current_epoch, associated either with a checkpoint or the best performing model.
-        if (save_parameters):
+        if (save_weights):
             torch.save(self.state_dict(), path + "weights" + file_type)

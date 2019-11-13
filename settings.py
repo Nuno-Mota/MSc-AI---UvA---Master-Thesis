@@ -27,7 +27,8 @@ import helpers.names as _names
 import helpers.classes_instantiator as _classes
 import helpers.paths as _paths
 import datasets.data_paths as _data_paths
-from   datasets.data_loaders.into_trainer import PadCollateMetaDataloader, PadCollateDecoderPreTraining, PadCollateEmbeddingLayerPreTraining
+from   datasets.data_loaders.into_trainer import PadCollateMetaDataloader, PadCollateDecoderPreTraining
+from   datasets.data_loaders.into_trainer import PadCollateEmbeddingLayerPreTraining
 from   helpers.general_helpers import pretty_dict_json_load, file_len, isfloat, print_warning, join_path
 
 
@@ -85,16 +86,6 @@ class Settings:
     # Dataset parameters regarding the experiment type.
     parser.add_argument('--masking_type', default=None,
                         help="Determines what kind of masking experiment is to be conducted.")
-    # TODO: Leave or remove 'full_prob_interp'?
-    parser.add_argument('--full_prob_interp', default=None,
-                        help="Determines whether a full probabilistic interpretation should be considered. This has" +
-                             "no effect on the Normal (N) setting or the non-Generalised settings (ZS, FS-1, FS-2 " +
-                             "FS-5, FS-10) as then the evaluation splits would revert to the corresponding " +
-                             "Generalised setting. However, for the Generalised settings this means that all classes " +
-                             "will always be considered (even if they have no instances present in the split). This " +
-                             "allows actually learning a model of the probability distribution over classes. It " +
-                             "starts from the assumption that all possibly existing classes are known a priori and " +
-                             "it might just be the case that no (or few) instances are know.")
     parser.add_argument('--dataset_type', default=None,
                         help="Determines whether the dataset to be used is meant to be a very small subset of the " +
                              "entire data, with the purpose of testing an implementation (DEBUG), a small subset of " +
@@ -112,8 +103,6 @@ class Settings:
     parser.add_argument('--classes_descs_embed_file', default=None,
                         help='Indicates the file that contains the embeddings of the relation descriptions associated' +
                              'with a UW_RE_UVA dataset')
-    # parser.add_argument('--dataset_debug', default=None,
-    #                     help='Temp variable that allows to debug the test results being utter crap.')
 
 
     # Specific state related arguments.
@@ -172,6 +161,17 @@ class Settings:
 #############################################
 
 def validate_argparse_args(args):
+    """
+    Function that validates the given input console arguments (and some of the arguments in the correspondingly
+    specified dictionaries).
+
+
+    :param args: The arguments as interpreted by the argparse library.
+
+
+    :return: Two dictionaries: the first contains the valid arguments and the second contains auxiliar arguments.
+    """
+
     valid_args = {}
     aux_args   = {}
 
@@ -185,9 +185,6 @@ def validate_argparse_args(args):
         else:
             raise ValueError("Invalid command line argument value for --model_name=" + str(args.model_name) + " as " +
                              "it does not correspond to a known model.")
-    # TODO: can directly instantiate a previous state in MEM.
-    # else:
-    #     raise RuntimeError("Missing command line argument '--model_name', necessary to instantiate a model.")
 
 
     # ******************************** #
@@ -211,15 +208,12 @@ def validate_argparse_args(args):
         valid_args["device"] = torch.device('cpu')
 
 
-    # Validate 'server_scratch'.
+    # Validate 'server_scratch', for the LISA cluster.
     if (args.server_scratch is not None):
         if (args.server_scratch in _names.REMOTE_SERVERS):
-            # TODO: Copy everything at the end of training and copy back any results at the end!
             if (_names.REMOTE_SERVERS[args.server_scratch] == 'Lisa'):
                 # Model related paths
                 tmpdir = os.popen("echo $TMPDIR").read().strip()
-                # _paths.trained_models_path = os.path.join(tmpdir, _paths.trained_models_path)
-                # _paths.params_dicts        = os.path.join(tmpdir, _paths.params_dicts)
 
                 # Data paths
                 _data_paths.MNIST                     = join_path([tmpdir, _data_paths.MNIST])
@@ -415,15 +409,6 @@ def validate_argparse_args(args):
                 raise ValueError("Invalid command line argument value for '--setting': " +
                                  str(args.setting))
 
-            # TODO: Remove at some point
-            # # Validate 'dataset_debug' setting.
-            # if (args.dataset_debug is not None):
-            #     if (args.dataset_debug.lower() in ['instances', 'classes']):
-            #         dataset_params["dataset_debug"] = args.dataset_debug.lower()
-            #     else:
-            #         raise ValueError("Invalid command line argument value for '--dataset_debug': " +
-            #                          str(args.dataset_debug))
-
             # Validate 'fold' setting.
             if (int(args.fold) >= 0 and int(args.fold) <= _names.FOLD_NUMS[dataset_params["dataset_type"]]):
                 dataset_params["fold"] = args.fold
@@ -447,7 +432,7 @@ def validate_argparse_args(args):
         else:
             dataset_params['validation'] = valid_args["validation"]
 
-            # For UW-RE-UVA the dataloader always has a batch size of 1, and the actual minibatch size is handled
+            # For UW-RE-UVA the dataloader always has a batch size of 1, and the actual mini-batch size is handled
             # internally by the dataset.
             dataset_params['batch_size_xs'] = mem_params["batch_size"]
             mem_params["batch_size"] = 1
@@ -482,8 +467,6 @@ def validate_argparse_args(args):
 
         if (args.epoch_or_best < -1):
             raise ValueError(err_msg)
-        # else:
-        #     valid_args["epoch_or_best"] = epoch_or_best
 
 
     # Validate 'keep_last_n_chekpoints' setting
@@ -652,8 +635,153 @@ def validate_argparse_args(args):
 
 
 
+def validate_model_parameters(valid_args, dataset_params, model_params):
+    """
+    This function helps validate the parameters of the selected model.
+
+
+    :param valid_args    : The valid arguments that have been processed so far.
+
+    :param dataset_params: The valid dataset parameters that have been processed so far.
+
+    :param model_params  : The valid model parameters that have been processed so far.
+
+
+    :return: Nothing
+    """
+
+    # If the model is a Multi Layer Perceptron.
+    if (valid_args["model_name"] == 'MLP'):
+        verify_mlp_model_parameters(model_params)
+
+
+    # If the model is our ESIM Set to Set Relation Classification model.
+    elif (valid_args["model_name"] == 'ESIM_StS'):
+        model_params['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
+        verify_ESIM_StS_encoder_params(model_params)
+
+
+    # If the model is our simple Baseline BiLSTM Relation Classification model.
+    elif (valid_args["model_name"] == 'Baseline_BiLSTM'):
+        model_params['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
+
+        # Verify model's word embedding size.
+        if ('word_embedding_size' not in model_params):
+            raise KeyError("The Baseline_BiLSTM model requires a specified 'word_embedding_size' parameter.")
+        else:
+            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
+                raise ValueError("The Baseline_BiLSTM model expects ELMO embeddings, which have a size of either " +
+                                 "1024 or 3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
+
+        # Verify Baseline_BiLSTM' first LSTM's hidden size.
+        if ('first_bilstm_hidden_size' not in model_params):
+            raise KeyError("Baseline_BiLSTM requires a specified 'first_bilstm_hidden_size' parameter.")
+        else:
+            try:
+                model_params['first_bilstm_hidden_size'] = verify_layer_size(model_params['first_bilstm_hidden_size'],
+                                                                             0)
+            except ValueError:
+                raise ValueError("Parameter 'first_bilstm_hidden_size' is not a valid layer size. Should " +
+                                 "be a positive integer. Current value: " +
+                                 str(model_params['first_bilstm_hidden_size'])) from None
+
+        # Verify Baseline_BiLSTM' single embedding bilstm parameter.
+        if ('single_embedding_bilstm' not in model_params):
+            raise KeyError("Baseline_BiLSTM encoder requires a specified 'single_embedding_bilstm' parameter.")
+        else:
+            s_e_b = model_params['single_embedding_bilstm']
+            if (any(s_e_b == value for value in [True, "True", "true", False, "False", "false"])):
+                model_params["single_embedding_bilstm"] = any(s_e_b == value for value in [True, "True", "true"])
+            else:
+                raise ValueError("Baseline_BiLSTM' parameter 'single_embedding_bilstm' should be either 'True' or " +
+                                 "'False', indicating whether to use a common (single) BiLSTM to encode both sentences " +
+                                 "and classes descriptions or whether to use separate BiLSTMs. Current value: "
+                                 + str(s_e_b) + ").")
+
+
+    # If the model is our Bag of Words Unsupervised Relation Classification Decoder.
+    elif (valid_args["model_name"] == 'RE_BoW_DECODER'):
+        verify_RE_BoW_DECODER_params(dataset_params, model_params)
+
+
+    # If the model is our ESIM Embedding layer, used for pre-training purposes.
+    elif (valid_args["model_name"] == 'ESIM_Embed_Layer_AE'):
+        # Verify model's word embedding size.
+        if ('word_embedding_size' not in model_params):
+            raise KeyError("The RE_BoW model requires a specified 'word_embedding_size' parameter.")
+        else:
+            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
+                raise ValueError("The RE_BoW model expects ELMO embeddings, which have a size of either 1024 or " +
+                                 "3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
+
+        # Verify ESIM_StS' first LSTM's hidden size.
+        if ('first_bilstm_hidden_size' not in model_params):
+            raise KeyError("ESIM_Embed_Layer_AE requires a specified 'first_bilstm_hidden_size' parameter.")
+        else:
+            try:
+                model_params['first_bilstm_hidden_size'] = verify_layer_size(model_params['first_bilstm_hidden_size'],
+                                                                             0)
+            except ValueError:
+                raise ValueError("Parameter 'first_bilstm_hidden_size' is not a valid layer size. Should " +
+                                 "be a positive integer. Current value: " +
+                                 str(model_params['first_bilstm_hidden_size'])) from None
+
+
+    # If the model is our VAE-like Bag of Words Unsupervised Relation Classification model.
+    elif (valid_args["model_name"] == 'RE_BoW'):
+
+        # *** Verify parameters common to both the encoder and the decoder. *** #
+        # Verify model's word embedding size.
+        if ('word_embedding_size' not in model_params):
+            raise KeyError("The RE_BoW model requires a specified 'word_embedding_size' parameter.")
+        else:
+            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
+                raise ValueError("The RE_BoW model expects ELMO embeddings, which have a size of either 1024 or " +
+                                 "3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
+
+
+        # *** Verify the encoder's parameters. *** #
+        if ('encoder_params_dict' not in model_params):
+            raise KeyError("Cannot build (using a parameters' dictionary) a RE-BoW model if the parameter" +
+                            "'encoder_params_dict' has not been specified.")
+        model_params['encoder_params_dict']['word_embedding_size'] = model_params['word_embedding_size']
+        model_params['encoder_params_dict']['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
+        verify_ESIM_StS_encoder_params(model_params['encoder_params_dict'])
+
+
+
+        # *** Verify the decoder's parameters. *** #
+        if ('decoder_params_dict' not in model_params):
+            raise KeyError("Cannot build (using a parameters' dictionary) a RE-BoW model if the parameter" +
+                            "'decoder_params_dict' has not been specified.")
+        model_params['decoder_params_dict']['word_embedding_size'] = model_params['word_embedding_size']
+        efbhs = model_params['encoder_params_dict']['first_bilstm_hidden_size']
+        model_params['decoder_params_dict']['first_bilstm_hidden_size'] = efbhs
+        verify_RE_BoW_DECODER_params(dataset_params, model_params['decoder_params_dict'])
+        del model_params['decoder_params_dict']['first_bilstm_hidden_size']
+
+
+    else:
+        raise NotImplementedError
+
+
+
+
 def adapt_model_params_for_experiment(model_type, dataset_params, model_params):
-    """Docstring here. TODO"""
+    """
+    This function automatically adapts the model's parameters to match the experiment (Any-Shot Learning,
+    Unsupervised Relation Classification, ...) being performed.
+
+
+    :param model_type    : The model in question, from the existing model types in 'Code/models/'
+
+    :param dataset_params: The specified parameters that identify the dataset and its properties.
+
+    :param model_params  : The specific parameters that define most of the model's architecture.
+
+
+    :return: Nothing
+    """
 
     if (model_type == 'MLP'):
         pass
@@ -701,121 +829,16 @@ def adapt_model_params_for_experiment(model_type, dataset_params, model_params):
 
 
 
-def validate_model_parameters(valid_args, dataset_params, model_params):
-    """Docstring here. TODO"""
-
-    if (valid_args["model_name"] == 'MLP'):
-        verify_mlp_model_parameters(model_params)
-
-
-    elif (valid_args["model_name"] == 'ESIM_StS'):
-        model_params['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
-        verify_ESIM_StS_encoder_params(model_params)
-
-
-    elif (valid_args["model_name"] == 'Baseline_BiLSTM'):
-        model_params['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
-
-        # Verify model's word embedding size.
-        if ('word_embedding_size' not in model_params):
-            raise KeyError("The Baseline_BiLSTM model requires a specified 'word_embedding_size' parameter.")
-        else:
-            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
-                raise ValueError("The Baseline_BiLSTM model expects ELMO embeddings, which have a size of either " +
-                                 "1024 or 3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
-
-        # Verify Baseline_BiLSTM' first LSTM's hidden size.
-        if ('first_bilstm_hidden_size' not in model_params):
-            raise KeyError("Baseline_BiLSTM requires a specified 'first_bilstm_hidden_size' parameter.")
-        else:
-            try:
-                model_params['first_bilstm_hidden_size'] = verify_layer_size(model_params['first_bilstm_hidden_size'],
-                                                                             0)
-            except ValueError:
-                raise ValueError("Parameter 'first_bilstm_hidden_size' is not a valid layer size. Should " +
-                                 "be a positive integer. Current value: " +
-                                 str(model_params['first_bilstm_hidden_size'])) from None
-
-        # Verify Baseline_BiLSTM' single embedding bilstm parameter.
-        if ('single_embedding_bilstm' not in model_params):
-            raise KeyError("Baseline_BiLSTM encoder requires a specified 'single_embedding_bilstm' parameter.")
-        else:
-            s_e_b = model_params['single_embedding_bilstm']
-            if (any(s_e_b == value for value in [True, "True", "true", False, "False", "false"])):
-                model_params["single_embedding_bilstm"] = any(s_e_b == value for value in [True, "True", "true"])
-            else:
-                raise ValueError("Baseline_BiLSTM' parameter 'single_embedding_bilstm' should be either 'True' or " +
-                                 "'False', indicating whether to use a common (single) BiLSTM to encode both sentences " +
-                                 "and classes descriptions or whether to use separate BiLSTMs. Current value: "
-                                 + str(s_e_b) + ").")
-
-
-    elif (valid_args["model_name"] == 'RE_BoW_DECODER'):
-        verify_RE_BoW_DECODER_params(dataset_params, model_params)
-
-
-    elif (valid_args["model_name"] == 'ESIM_Embed_Layer_AE'):
-        # Verify model's word embedding size.
-        if ('word_embedding_size' not in model_params):
-            raise KeyError("The RE_BoW model requires a specified 'word_embedding_size' parameter.")
-        else:
-            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
-                raise ValueError("The RE_BoW model expects ELMO embeddings, which have a size of either 1024 or " +
-                                 "3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
-
-        # Verify ESIM_StS' first LSTM's hidden size.
-        if ('first_bilstm_hidden_size' not in model_params):
-            raise KeyError("ESIM_Embed_Layer_AE requires a specified 'first_bilstm_hidden_size' parameter.")
-        else:
-            try:
-                model_params['first_bilstm_hidden_size'] = verify_layer_size(model_params['first_bilstm_hidden_size'],
-                                                                             0)
-            except ValueError:
-                raise ValueError("Parameter 'first_bilstm_hidden_size' is not a valid layer size. Should " +
-                                 "be a positive integer. Current value: " +
-                                 str(model_params['first_bilstm_hidden_size'])) from None
-
-    elif (valid_args["model_name"] == 'RE_BoW'):
-
-        # *** Verify parameters common to both the encoder and the decoder. *** #
-        # Verify model's word embedding size.
-        if ('word_embedding_size' not in model_params):
-            raise KeyError("The RE_BoW model requires a specified 'word_embedding_size' parameter.")
-        else:
-            if (model_params['word_embedding_size'] != 1024 and model_params['word_embedding_size'] != 3 * 1024):
-                raise ValueError("The RE_BoW model expects ELMO embeddings, which have a size of either 1024 or " +
-                                 "3*1024. Current value: " + str(model_params['word_embedding_size']) + ".")
-
-
-        # *** Verify the encoder's parameters. *** #
-        if ('encoder_params_dict' not in model_params):
-            raise KeyError("Cannot build (using a parameters' dictionary) a RE-BoW model if the parameter" +
-                            "'encoder_params_dict' has not been specified.")
-        model_params['encoder_params_dict']['word_embedding_size'] = model_params['word_embedding_size']
-        model_params['encoder_params_dict']['classes_descs_embed_file'] = valid_args['classes_descs_embed_file']
-        verify_ESIM_StS_encoder_params(model_params['encoder_params_dict'])
-
-
-
-        # *** Verify the decoder's parameters. *** #
-        if ('decoder_params_dict' not in model_params):
-            raise KeyError("Cannot build (using a parameters' dictionary) a RE-BoW model if the parameter" +
-                            "'decoder_params_dict' has not been specified.")
-        model_params['decoder_params_dict']['word_embedding_size'] = model_params['word_embedding_size']
-        efbhs = model_params['encoder_params_dict']['first_bilstm_hidden_size']
-        model_params['decoder_params_dict']['first_bilstm_hidden_size'] = efbhs
-        verify_RE_BoW_DECODER_params(dataset_params, model_params['decoder_params_dict'])
-        del model_params['decoder_params_dict']['first_bilstm_hidden_size']
-
-
-    else:
-        raise NotImplementedError
-
-
-
-
 def verify_ESIM_StS_encoder_params(params_dict):
-    """Docstring here. TODO"""
+    """
+    This function verifies the parameters of our ESIM Set to Set model.
+
+
+    :param params_dict: The defined model parameters.
+
+
+    :return: Nothing
+    """
 
     # Verify ESIM_StS' word embedding size.
     if ('word_embedding_size' not in params_dict):
@@ -880,8 +903,8 @@ def verify_ESIM_StS_encoder_params(params_dict):
         verify_mlp_model_parameters(score_mlp_params)
         params_dict['score_mlp_post_first_layer_sizes'] = score_mlp_params['layers_sizes']
         params_dict['score_mlp_post_first_layer_activations'] = score_mlp_params['activation_functions']
-        # TODO: I think if dropout values are specified this will break. So far I have had no need, so I'll address this
-        # TODO: problem later.
+        # TODO: This will break as ESIM is not ready to have its MLP dropout values be specified. So far I have had no
+        # TODO: need for them, so I'll address this problem later.
         if ('dropout_values' in score_mlp_params):
             params_dict['score_mlp_post_first_layer_dropout_values'] = score_mlp_params['dropout_values']
         params_dict.pop('score_mlp_post_first_layer', None)
@@ -890,7 +913,18 @@ def verify_ESIM_StS_encoder_params(params_dict):
 
 
 def verify_RE_BoW_DECODER_params(dataset_params, params_dict):
-    """Docstring here. TODO"""
+    """
+    This function verifies the validity of our Unsupervised Relation Classification model's Bag of Words decoder's
+    parameters.
+
+
+    :param dataset_params: The parameters concerning the dataset to be used, which determines the experiment type.
+
+    :param params_dict   : The specified model parameters.
+
+
+    :return: Nothing
+    """
 
     if ('load_path' not in params_dict):
         if ('vector_relation_encoding' in params_dict):
@@ -953,7 +987,15 @@ def verify_RE_BoW_DECODER_params(dataset_params, params_dict):
 
 
 def verify_mlp_model_parameters(params_dict):
-    """Docstring here. TODO"""
+    """
+    This function verifies the models of a Multi Layer Perceptron.
+
+
+    :param params_dict: The specified model parameters.
+
+
+    :return: Nothing
+    """
 
     # Check if the minimum necessary parameters (layers' sizes and activation functions) has been specified.
     if ('layers_sizes' not in params_dict or 'activation_functions' not in params_dict):
@@ -994,6 +1036,15 @@ def verify_mlp_model_parameters(params_dict):
 
 
 def verify_mlp_layers_sizes(params_dict):
+    """
+    This function verifies if the layer sizes of an MLP are valid.
+
+
+    :param params_dict: The specified MLP parameters.
+
+
+    :return: Nothing
+    """
 
     spacing = " " * len('ValueError: ')
     err_msg = "Incorrect formatting of mlp's layers_sizes. Should be a python\n"
@@ -1014,6 +1065,18 @@ def verify_mlp_layers_sizes(params_dict):
 
 
 def verify_layer_size(layer_size, l_num):
+    """
+    This function verifies the validity of the specified size of a single layer.
+
+
+    :param layer_size: The layer size.
+
+    :param l_num     : The layer depth, for identification when an error occurs.
+
+
+    :return: Nothing
+    """
+
     if (isinstance(layer_size, int) and layer_size > 0):
         return layer_size
     else:
@@ -1023,6 +1086,15 @@ def verify_layer_size(layer_size, l_num):
 
 
 def verify_mlp_activation_functions(params_dict):
+    """
+    This function verifies if the activation functions of an MLP are valid.
+
+
+    :param params_dict: The specified MLP parameters.
+
+
+    :return: Nothing
+    """
 
     spacing = " " * len('ValueError: ')
     err_msg = "Incorrect formatting of mlp's activation functions. Should be a python\n"
@@ -1043,6 +1115,17 @@ def verify_mlp_activation_functions(params_dict):
 
 
 def verify_activation_function(activation_function, af_num):
+    """
+    This function verifies a specific layer's activation function.
+
+
+    :param activation_function: The activation function name, as in the model parameters dictionary file.
+
+    :param af_num             : The layer depth, for identification when an error occurs.
+
+
+    :return: Nothing
+    """
 
     if (isinstance(activation_function, str)):
         if (activation_function in _names.AFS):
@@ -1077,6 +1160,15 @@ def verify_activation_function(activation_function, af_num):
 
 
 def verify_mlp_dropout_values(params_dict):
+    """
+    This function verifies if the dropout values of an MLP are valid.
+
+
+    :param params_dict: The specified MLP parameters.
+
+
+    :return: Nothing
+    """
 
     spacing = " " * len('ValueError: ')
     err_msg = "Incorrect formatting of mlp's dropout values. Should be a python\n"
@@ -1094,7 +1186,20 @@ def verify_mlp_dropout_values(params_dict):
 
 
 
+
 def verify_dropout_value(dropout_value, l_num):
+    """
+    This function verifies a specific layer's dropout value.
+
+
+    :param dropout_value: The dropout value, as in the model parameters dictionary file.
+
+    :param l_num        : The layer depth, for identification when an error occurs.
+
+
+    :return: Nothing
+    """
+
     if (isinstance(dropout_value, float) and dropout_value >= 0 and dropout_value < 1):
         return dropout_value
     else:
